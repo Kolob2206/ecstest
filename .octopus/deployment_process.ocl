@@ -1,0 +1,2954 @@
+step "collect-tg-arns" {
+    name = "Collect TG arns"
+
+    action {
+        action_type = "Octopus.AwsRunScript"
+        is_disabled = true
+        notes = "Creates or retrieves the LB TGs for use in subsequent steps."
+        properties = {
+            Octopus.Action.Aws.AssumeRole = "False"
+            Octopus.Action.Aws.Region = "#{Aws.Region}"
+            Octopus.Action.AwsAccount.UseInstanceRole = "False"
+            Octopus.Action.AwsAccount.Variable = "Aws.Account"
+            Octopus.Action.RunOnServer = "false"
+            Octopus.Action.Script.ScriptBody = <<-EOT
+                
+                
+                
+                
+                #{each MicroServiceConfig in DockerDeploy.MicroService}
+                	
+                    $containerName = "#{MicroServiceConfig.Name}"
+                	$containerTg = "#{MicroServiceConfig.TgName}"
+                    $containerPort =  "#{MicroServiceConfig.Port}"
+                    $healthCheck =  "#{MicroServiceConfig.HealthCheck}"
+                    
+                    Write-Host "name: $containerName Tg: $containerTg Port: $containerPort HealthCheck: $healthCheck"
+                
+                	$targetGroupsArn = [System.Collections.ArrayList]::new()
+                
+                	# loop through the containers in a task definition 
+                
+                	if ($containerTg.Length -ge 32)
+                	{
+                		$tgName = $containerTg.substring(0,31)
+                		Write-Host "Name: $tgName is too long, using shorter version"
+                	}
+                	else {
+                		$tgName = $containerTg
+                	}
+                
+                	$tgArn= aws elbv2  describe-target-groups --name $tgName  --query "TargetGroups[*].TargetGroupArn"  |convertFrom-Json 
+                	if(!($tgArn))
+                	{
+                		write-host "Target group $tgName not found. Please verify it exists or the name is set correctly."
+                        Exit 1
+                		
+                	}
+                	else {
+                		write-host "$containerName was found. tgarn: $tgArn"	
+                	}
+                	
+                    Set-OctopusVariable -name "tg_arn_$containerName" -value "$tgArn"
+                #{/each}
+                
+                EOT
+            Octopus.Action.Script.ScriptSource = "Inline"
+            Octopus.Action.Script.Syntax = "PowerShell"
+            OctopusUseBundledTooling = "True"
+        }
+    }
+}
+
+step "deploy-avio-ui-policyadvancedoptions" {
+    name = "Deploy Avio-UI-PolicyAdvancedOptions"
+    package_requirement = "AfterPackageAcquisition"
+    properties = {
+        Octopus.Action.TargetRoles = "ecs-cluster"
+    }
+    start_trigger = "StartWithPrevious"
+
+    action {
+        action_type = "aws-ecs"
+        is_disabled = true
+        notes = "Deploys Avio-UI-PolicyAdvancedOptions to an ecs cluster."
+        step_package_version = "1.4.0"
+        worker_pool = "default-worker-pool"
+
+        packages "avio-ui-poladvop" {
+            acquisition_location = "NotAcquired"
+            feed = "rivadev-ecr-feed"
+            package_id = "avio-ui-poladvop"
+            step_package_inputs_reference_id = "b4d422a0-8014-4ee9-b330-712f88c27d1f"
+        }
+
+        inputs {
+            cfStackName = "CFS-#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}"
+            desiredCount = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].ServiceCount}"
+            maximumHealthPercent = 200
+            minimumHealthPercent = 100
+            name = "#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}-svc"
+
+            additionalTags {
+                enableEcsManagedTags = false
+            }
+
+            containers {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                essential = true
+
+                containerImageReference {
+                    feedId = "Feeds-1021"
+                    imageName = "avio-ui-poladvop"
+                    referenceId = "b4d422a0-8014-4ee9-b330-712f88c27d1f"
+                }
+
+                containerLogging {
+                    type = "auto"
+                }
+
+                containerPortMappings {
+                    containerPort = 80
+                    protocol = "tcp"
+                }
+
+                containerStorage {
+                    readOnlyRootFileSystem = false
+                }
+
+                environmentVariables {
+                    key = "INSTANCE_ID"
+                    type = "plain"
+                    value = "#{AvioInstanceId}"
+                }
+
+                healthCheck {}
+
+                networkSettings {
+                    disableNetworking = false
+                }
+
+                repositoryAuthentication {
+                    type = "default"
+                }
+            }
+
+            loadBalancerMappings {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                containerPort = 80
+                targetGroupArn = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].TgArn}"
+            }
+
+            networkConfiguration {
+                autoAssignPublicIp = false
+
+                securityGroupIds {
+                    id = "#{AwsEcs.SecurityGroupIdB}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdA}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdB}"
+                }
+            }
+
+            task {
+                cpu = 512
+                memory = 1024
+                taskExecutionRole = "#{AwsEcs.TaskExecutionRole}"
+
+                runtimePlatform {
+                    cpuArchitecture = "X86_64"
+                    operatingSystemFamily = "LINUX"
+                }
+            }
+
+            waitOption {
+                timeout = 30
+                type = "waitWithTimeout"
+            }
+        }
+    }
+}
+
+step "deploy-avio-ui-syncnow" {
+    name = "Deploy Avio-UI-SyncNow"
+    package_requirement = "AfterPackageAcquisition"
+    properties = {
+        Octopus.Action.TargetRoles = "ecs-cluster"
+    }
+    start_trigger = "StartWithPrevious"
+
+    action {
+        action_type = "aws-ecs"
+        is_disabled = true
+        notes = "Deploys Avio-UI-SyncNow to an ecs cluster."
+        properties = {
+            Octopus.Action.RunOnServer = "false"
+        }
+        step_package_version = "1.4.0"
+
+        packages "avio-ui-syncnow" {
+            acquisition_location = "NotAcquired"
+            feed = "rivadev-ecr-feed"
+            package_id = "avio-ui-syncnow"
+            step_package_inputs_reference_id = "b4d422a0-8014-4ee9-b330-712f88c27d1f"
+        }
+
+        inputs {
+            cfStackName = "CFS-#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}"
+            desiredCount = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].ServiceCount}"
+            maximumHealthPercent = 200
+            minimumHealthPercent = 100
+            name = "#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}-svc"
+
+            additionalTags {
+                enableEcsManagedTags = false
+            }
+
+            containers {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                essential = true
+
+                containerImageReference {
+                    feedId = "Feeds-1021"
+                    imageName = "avio-ui-syncnow"
+                    referenceId = "b4d422a0-8014-4ee9-b330-712f88c27d1f"
+                }
+
+                containerLogging {
+                    type = "auto"
+                }
+
+                containerPortMappings {
+                    containerPort = 80
+                    protocol = "tcp"
+                }
+
+                containerStorage {
+                    readOnlyRootFileSystem = false
+                }
+
+                environmentVariables {
+                    key = "INSTANCE_ID"
+                    type = "plain"
+                    value = "#{AvioInstanceId}"
+                }
+
+                healthCheck {}
+
+                networkSettings {
+                    disableNetworking = false
+                }
+
+                repositoryAuthentication {
+                    type = "default"
+                }
+            }
+
+            loadBalancerMappings {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                containerPort = 80
+                targetGroupArn = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].TgArn}"
+            }
+
+            networkConfiguration {
+                autoAssignPublicIp = false
+
+                securityGroupIds {
+                    id = "#{AwsEcs.SecurityGroupIdB}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdA}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdB}"
+                }
+            }
+
+            task {
+                cpu = 512
+                memory = 1024
+                taskExecutionRole = "#{AwsEcs.TaskExecutionRole}"
+
+                runtimePlatform {
+                    cpuArchitecture = "X86_64"
+                    operatingSystemFamily = "LINUX"
+                }
+            }
+
+            waitOption {
+                timeout = 30
+                type = "waitWithTimeout"
+            }
+        }
+    }
+}
+
+step "deploy-avio-ui-connectiontest" {
+    name = "Deploy Avio-UI-ConnectionTest"
+    package_requirement = "AfterPackageAcquisition"
+    properties = {
+        Octopus.Action.TargetRoles = "ecs-cluster"
+    }
+    start_trigger = "StartWithPrevious"
+
+    action {
+        action_type = "aws-ecs"
+        is_disabled = true
+        notes = "Deploys Avio-UI-ConnectionTest to an ecs cluster."
+        properties = {
+            Octopus.Action.RunOnServer = "false"
+        }
+        step_package_version = "1.4.0"
+        tenant_tags = ["Version/Trunk"]
+
+        packages "avio-ui-connectiontest" {
+            acquisition_location = "NotAcquired"
+            feed = "rivadev-ecr-feed"
+            package_id = "avio-ui-connectiontest"
+            step_package_inputs_reference_id = "b4d422a0-8014-4ee9-b330-712f88c27d1f"
+        }
+
+        inputs {
+            cfStackName = "CFS-#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}"
+            desiredCount = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].ServiceCount}"
+            maximumHealthPercent = 200
+            minimumHealthPercent = 100
+            name = "#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}-svc"
+
+            additionalTags {
+                enableEcsManagedTags = false
+            }
+
+            containers {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                essential = true
+
+                containerImageReference {
+                    feedId = "Feeds-1021"
+                    imageName = "avio-ui-connectiontest"
+                    referenceId = "b4d422a0-8014-4ee9-b330-712f88c27d1f"
+                }
+
+                containerLogging {
+                    type = "auto"
+                }
+
+                containerPortMappings {
+                    containerPort = 80
+                    protocol = "tcp"
+                }
+
+                containerStorage {
+                    readOnlyRootFileSystem = false
+                }
+
+                environmentVariables {
+                    key = "INSTANCE_ID"
+                    type = "plain"
+                    value = "#{AvioInstanceId}"
+                }
+
+                healthCheck {}
+
+                networkSettings {
+                    disableNetworking = false
+                }
+
+                repositoryAuthentication {
+                    type = "default"
+                }
+            }
+
+            loadBalancerMappings {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                containerPort = 80
+                targetGroupArn = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].TgArn}"
+            }
+
+            networkConfiguration {
+                autoAssignPublicIp = false
+
+                securityGroupIds {
+                    id = "#{AwsEcs.SecurityGroupIdB}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdA}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdB}"
+                }
+            }
+
+            task {
+                cpu = 512
+                memory = 1024
+                taskExecutionRole = "#{AwsEcs.TaskExecutionRole}"
+
+                runtimePlatform {
+                    cpuArchitecture = "X86_64"
+                    operatingSystemFamily = "LINUX"
+                }
+            }
+
+            waitOption {
+                timeout = 30
+                type = "waitWithTimeout"
+            }
+        }
+    }
+}
+
+step "deploy-avio-srv-policyadvancedoptions" {
+    name = "Deploy Avio-Srv-PolicyAdvancedOptions"
+    package_requirement = "AfterPackageAcquisition"
+    properties = {
+        Octopus.Action.TargetRoles = "ecs-cluster"
+    }
+    start_trigger = "StartWithPrevious"
+
+    action {
+        action_type = "aws-ecs"
+        is_disabled = true
+        notes = "Deploys Avio-Srv-PolicyAdvancedOptions to an ecs cluster."
+        properties = {
+            Octopus.Action.RunOnServer = "false"
+        }
+        step_package_version = "2.3.0"
+
+        packages "avio-srv-poladvop" {
+            acquisition_location = "NotAcquired"
+            feed = "rivadev-ecr-feed"
+            package_id = "avio-srv-poladvop"
+            step_package_inputs_reference_id = "b4d422a0-8014-4ee9-b330-712f88c27d1f"
+        }
+
+        inputs {
+            cfStackName = "CFS-#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}"
+            desiredCount = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].ServiceCount}"
+            maximumHealthPercent = 200
+            minimumHealthPercent = 100
+            name = "#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}-svc"
+
+            additionalTags {
+                enableEcsManagedTags = false
+            }
+
+            containers {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                essential = true
+
+                containerImageReference {
+                    feedId = "Feeds-1021"
+                    imageName = "avio-srv-poladvop"
+                    referenceId = "4b90189e-8cf5-4954-94cd-ea389ca42a4f"
+                }
+
+                containerLogging {
+                    type = "auto"
+                }
+
+                containerPortMappings {
+                    containerPort = 80
+                    protocol = "tcp"
+                }
+
+                containerStorage {
+                    readOnlyRootFileSystem = false
+                }
+
+                environmentVariables {
+                    key = "Jwt__Asymmetric__PublicKey"
+                    type = "plain"
+                    value = "#{AvioJwtPublicKey}"
+                }
+
+                environmentVariables {
+                    key = "RasConnectionStrings"
+                    type = "plain"
+                    value = "#{DockerDeploy.RasConnectionStrings}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__0"
+                    type = "plain"
+                    value = "Serilog.Sinks.Splunk"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__1"
+                    type = "plain"
+                    value = "Serilog.Sinks.File"
+                }
+
+                environmentVariables {
+                    key = "Serilog__MinimumLevel"
+                    type = "plain"
+                    value = "Information"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Name"
+                    type = "plain"
+                    value = "EventCollector"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__splunkHost"
+                    type = "plain"
+                    value = "#{AvioSplunk.SplunkHost}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__eventCollectorToken"
+                    type = "plain"
+                    value = "#{AvioSplunk.EventCollectorToken}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__index"
+                    type = "plain"
+                    value = "#{AvioSplunk.Index}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Name"
+                    type = "plain"
+                    value = "File"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Properties__Application"
+                    type = "plain"
+                    value = "Avio Policy Advanced Option Service"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__path"
+                    type = "plain"
+                    value = "./log-container.txt"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__rollingInterval"
+                    type = "plain"
+                    value = "Day"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__fileSizeLimitBytes"
+                    type = "plain"
+                    value = "10485760"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__0"
+                    type = "plain"
+                    value = "WithCorrelationId"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__1"
+                    type = "plain"
+                    value = "WithEnvironmentUserName"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__2"
+                    type = "plain"
+                    value = "WithEnvironmentName"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__3"
+                    type = "plain"
+                    value = "WithMachineName"
+                }
+
+                firelensConfiguration {
+                    type = "disabled"
+                }
+
+                healthCheck {}
+
+                networkSettings {
+                    disableNetworking = false
+                }
+
+                repositoryAuthentication {
+                    type = "default"
+                }
+            }
+
+            loadBalancerMappings {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                containerPort = 80
+                targetGroupArn = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].TgArn}"
+            }
+
+            networkConfiguration {
+                autoAssignPublicIp = false
+
+                securityGroupIds {
+                    id = "#{AwsEcs.SecurityGroupIdB}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdA}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdB}"
+                }
+            }
+
+            task {
+                cpu = 512
+                memory = 1024
+                taskExecutionRole = "#{AwsEcs.TaskExecutionRole}"
+
+                runtimePlatform {
+                    cpuArchitecture = "X86_64"
+                    operatingSystemFamily = "LINUX"
+                }
+            }
+
+            waitOption {
+                timeout = 30
+                type = "waitWithTimeout"
+            }
+        }
+    }
+}
+
+step "deploy-avio-policyadvancedoptions-consolidated" {
+    name = "Deploy Avio-PolicyAdvancedOptions-Consolidated"
+    package_requirement = "AfterPackageAcquisition"
+    properties = {
+        Octopus.Action.TargetRoles = "ecs-cluster"
+    }
+    start_trigger = "StartWithPrevious"
+
+    action {
+        action_type = "aws-ecs"
+        notes = "Deploys Avio-PolicyAdvancedOptions to an ecs cluster."
+        step_package_version = "2.3.0"
+        worker_pool = "default-worker-pool"
+
+        packages "avio-poladvop" {
+            acquisition_location = "NotAcquired"
+            feed = "rivadev-ecr-feed"
+            package_id = "avio-poladvop"
+            step_package_inputs_reference_id = "4b90189e-8cf5-4954-94cd-ea389ca42a4f"
+        }
+
+        inputs {
+            cfStackName = "CFS-#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}"
+            desiredCount = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].ServiceCount}"
+            maximumHealthPercent = 200
+            minimumHealthPercent = 100
+            name = "#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}-svc"
+
+            additionalTags {
+                enableEcsManagedTags = false
+            }
+
+            containers {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                essential = true
+
+                containerImageReference {
+                    feedId = "Feeds-1021"
+                    imageName = "avio-poladvop"
+                    referenceId = "4b90189e-8cf5-4954-94cd-ea389ca42a4f"
+                }
+
+                containerLogging {
+                    type = "auto"
+                }
+
+                containerPortMappings {
+                    containerPort = 80
+                    protocol = "tcp"
+                }
+
+                containerStorage {
+                    readOnlyRootFileSystem = false
+                }
+
+                environmentVariables {
+                    key = "Jwt__Asymmetric__PublicKey"
+                    type = "plain"
+                    value = "#{AvioJwtPublicKey}"
+                }
+
+                environmentVariables {
+                    key = "RasConnectionStrings"
+                    type = "plain"
+                    value = "#{DockerDeploy.RasConnectionStrings}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__0"
+                    type = "plain"
+                    value = "Serilog.Sinks.Splunk"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__1"
+                    type = "plain"
+                    value = "Serilog.Sinks.File"
+                }
+
+                environmentVariables {
+                    key = "Serilog__MinimumLevel"
+                    type = "plain"
+                    value = "Information"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Name"
+                    type = "plain"
+                    value = "EventCollector"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__splunkHost"
+                    type = "plain"
+                    value = "#{AvioSplunk.SplunkHost}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__eventCollectorToken"
+                    type = "plain"
+                    value = "#{AvioSplunk.EventCollectorToken}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__index"
+                    type = "plain"
+                    value = "#{AvioSplunk.Index}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Name"
+                    type = "plain"
+                    value = "File"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Properties__Application"
+                    type = "plain"
+                    value = "Avio Policy Advanced Option Service"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__path"
+                    type = "plain"
+                    value = "./log-container.txt"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__rollingInterval"
+                    type = "plain"
+                    value = "Day"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__fileSizeLimitBytes"
+                    type = "plain"
+                    value = "10485760"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__0"
+                    type = "plain"
+                    value = "WithCorrelationId"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__1"
+                    type = "plain"
+                    value = "WithMachineName"
+                }
+
+                environmentVariables {
+                    key = "INSTANCE_ID"
+                    type = "plain"
+                    value = "#{AvioInstanceId}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__auditIndex"
+                    type = "plain"
+                    value = "#{AvioSplunk.AuditIndex}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__2__Name"
+                    type = "plain"
+                    value = "WithEnvironmentVariable"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__2__Args__name"
+                    type = "plain"
+                    value = "EnvironmentTag"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Properties__EnvironmentTag"
+                    type = "plain"
+                    value = "#{EnvironmentTag}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Filter__0__Name"
+                    type = "plain"
+                    value = "ByExcluding"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Filter__0__Args__expression"
+                    type = "plain"
+                    value = "RequestPath like '%health%' or RequestPath like '/'"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__2"
+                    type = "plain"
+                    value = "Serilog.Expressions"
+                }
+
+                firelensConfiguration {
+                    type = "disabled"
+                }
+
+                healthCheck {}
+
+                networkSettings {
+                    disableNetworking = false
+                }
+
+                repositoryAuthentication {
+                    type = "default"
+                }
+            }
+
+            loadBalancerMappings {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                containerPort = 80
+                targetGroupArn = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].TgArn}"
+            }
+
+            networkConfiguration {
+                autoAssignPublicIp = false
+
+                securityGroupIds {
+                    id = "#{AwsEcs.SecurityGroupIdB}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdA}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdB}"
+                }
+            }
+
+            task {
+                cpu = 512
+                memory = 1024
+                taskExecutionRole = "#{AwsEcs.TaskExecutionRole}"
+
+                runtimePlatform {
+                    cpuArchitecture = "X86_64"
+                    operatingSystemFamily = "LINUX"
+                }
+            }
+
+            waitOption {
+                timeout = 30
+                type = "waitWithTimeout"
+            }
+        }
+    }
+}
+
+step "deploy-avio-srv-syncnow" {
+    name = "Deploy Avio-SyncNow"
+    package_requirement = "AfterPackageAcquisition"
+    properties = {
+        Octopus.Action.TargetRoles = "ecs-cluster"
+    }
+    start_trigger = "StartWithPrevious"
+
+    action "deploy-avio-syncnow" {
+        action_type = "aws-ecs"
+        is_disabled = true
+        notes = "Deploys Avio-SyncNow to an ecs cluster."
+        properties = {
+            Octopus.Action.RunOnServer = "false"
+        }
+        step_package_version = "1.4.0"
+
+        packages "avio-srv-syncnow" {
+            acquisition_location = "NotAcquired"
+            feed = "rivadev-ecr-feed"
+            package_id = "avio-srv-syncnow"
+            step_package_inputs_reference_id = "b4d422a0-8014-4ee9-b330-712f88c27d1f"
+        }
+
+        inputs {
+            cfStackName = "CFS-#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}"
+            desiredCount = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].ServiceCount}"
+            maximumHealthPercent = 200
+            minimumHealthPercent = 100
+            name = "#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}-svc"
+
+            additionalTags {
+                enableEcsManagedTags = false
+            }
+
+            containers {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                essential = true
+
+                containerImageReference {
+                    feedId = "Feeds-1021"
+                    imageName = "avio-srv-syncnow"
+                    referenceId = "b4d422a0-8014-4ee9-b330-712f88c27d1f"
+                }
+
+                containerLogging {
+                    type = "auto"
+                }
+
+                containerPortMappings {
+                    containerPort = 80
+                    protocol = "tcp"
+                }
+
+                containerStorage {
+                    readOnlyRootFileSystem = false
+                }
+
+                environmentVariables {
+                    key = "Jwt__Asymmetric__PublicKey"
+                    type = "plain"
+                    value = "#{AvioJwtPublicKey}"
+                }
+
+                environmentVariables {
+                    key = "RasConnectionStrings"
+                    type = "plain"
+                    value = "#{DockerDeploy.RasConnectionStrings}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__0"
+                    type = "plain"
+                    value = "Serilog.Sinks.Splunk"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__1"
+                    type = "plain"
+                    value = "Serilog.Sinks.File"
+                }
+
+                environmentVariables {
+                    key = "Serilog__MinimumLevel"
+                    type = "plain"
+                    value = "Information"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Name"
+                    type = "plain"
+                    value = "EventCollector"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__splunkHost"
+                    type = "plain"
+                    value = "#{AvioSplunk.SplunkHost}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__eventCollectorToken"
+                    type = "plain"
+                    value = "#{DockerDeploy.SplunkEventCollectorToken}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__index"
+                    type = "plain"
+                    value = "#{AvioSplunk.Index}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Name"
+                    type = "plain"
+                    value = "File"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Properties__Application"
+                    type = "plain"
+                    value = "Avio SyncNow Service"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__path"
+                    type = "plain"
+                    value = "./log-container.txt"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__rollingInterval"
+                    type = "plain"
+                    value = "Day"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__fileSizeLimitBytes"
+                    type = "plain"
+                    value = "10485760"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__0"
+                    type = "plain"
+                    value = "WithCorrelationId"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__1"
+                    type = "plain"
+                    value = "WithEnvironmentUserName"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__2"
+                    type = "plain"
+                    value = "WithEnvironmentName"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__3"
+                    type = "plain"
+                    value = "WithMachineName"
+                }
+
+                healthCheck {}
+
+                networkSettings {
+                    disableNetworking = false
+                }
+
+                repositoryAuthentication {
+                    type = "default"
+                }
+            }
+
+            loadBalancerMappings {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                containerPort = 80
+                targetGroupArn = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].TgArn}"
+            }
+
+            networkConfiguration {
+                autoAssignPublicIp = false
+
+                securityGroupIds {
+                    id = "#{AwsEcs.SecurityGroupIdB}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdA}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdB}"
+                }
+            }
+
+            task {
+                cpu = 512
+                memory = 1024
+                taskExecutionRole = "#{AwsEcs.TaskExecutionRole}"
+
+                runtimePlatform {
+                    cpuArchitecture = "X86_64"
+                    operatingSystemFamily = "LINUX"
+                }
+            }
+
+            waitOption {
+                timeout = 30
+                type = "waitWithTimeout"
+            }
+        }
+    }
+}
+
+step "deploy-avio-srv-syncnow-clone-1" {
+    name = "Deploy Avio-SyncNow-Consolidated"
+    package_requirement = "AfterPackageAcquisition"
+    properties = {
+        Octopus.Action.TargetRoles = "ecs-cluster"
+    }
+    start_trigger = "StartWithPrevious"
+
+    action {
+        action_type = "aws-ecs"
+        notes = "Deploys Avio-SyncNow-Consolidated to an ecs cluster."
+        step_package_version = "2.3.0"
+        worker_pool = "default-worker-pool"
+
+        packages "avio-syncnow" {
+            acquisition_location = "NotAcquired"
+            feed = "rivadev-ecr-feed"
+            package_id = "avio-syncnow"
+            step_package_inputs_reference_id = "acb341f1-a294-432b-84e0-a8a3518f2be5"
+        }
+
+        inputs {
+            cfStackName = "CFS-#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}"
+            desiredCount = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].ServiceCount}"
+            maximumHealthPercent = 200
+            minimumHealthPercent = 100
+            name = "#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}-svc"
+
+            additionalTags {
+                enableEcsManagedTags = false
+            }
+
+            containers {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                essential = true
+
+                containerImageReference {
+                    feedId = "Feeds-1021"
+                    imageName = "avio-syncnow"
+                    referenceId = "acb341f1-a294-432b-84e0-a8a3518f2be5"
+                }
+
+                containerLogging {
+                    type = "auto"
+                }
+
+                containerPortMappings {
+                    containerPort = 80
+                    protocol = "tcp"
+                }
+
+                containerStorage {
+                    readOnlyRootFileSystem = false
+                }
+
+                environmentVariables {
+                    key = "Jwt__Asymmetric__PublicKey"
+                    type = "plain"
+                    value = "#{AvioJwtPublicKey}"
+                }
+
+                environmentVariables {
+                    key = "RasConnectionStrings"
+                    type = "plain"
+                    value = "#{DockerDeploy.RasConnectionStrings}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__0"
+                    type = "plain"
+                    value = "Serilog.Sinks.Splunk"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__1"
+                    type = "plain"
+                    value = "Serilog.Sinks.File"
+                }
+
+                environmentVariables {
+                    key = "Serilog__MinimumLevel"
+                    type = "plain"
+                    value = "Information"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Name"
+                    type = "plain"
+                    value = "EventCollector"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__splunkHost"
+                    type = "plain"
+                    value = "#{AvioSplunk.SplunkHost}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__eventCollectorToken"
+                    type = "plain"
+                    value = "#{AvioSplunk.EventCollectorToken}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__index"
+                    type = "plain"
+                    value = "#{AvioSplunk.Index}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Name"
+                    type = "plain"
+                    value = "File"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Properties__Application"
+                    type = "plain"
+                    value = "Avio SyncNow Service"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__path"
+                    type = "plain"
+                    value = "./log-container.txt"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__rollingInterval"
+                    type = "plain"
+                    value = "Day"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__fileSizeLimitBytes"
+                    type = "plain"
+                    value = "10485760"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__0"
+                    type = "plain"
+                    value = "WithCorrelationId"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__1"
+                    type = "plain"
+                    value = "WithMachineName"
+                }
+
+                environmentVariables {
+                    key = "INSTANCE_ID"
+                    type = "plain"
+                    value = "#{AvioInstanceId}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__2__Name"
+                    type = "plain"
+                    value = "WithEnvironmentVariable"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__2__Args__name"
+                    type = "plain"
+                    value = "EnvironmentTag"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Properties__EnvironmentTag"
+                    type = "plain"
+                    value = "#{EnvironmentTag}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Filter__0__Name"
+                    type = "plain"
+                    value = "ByExcluding"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Filter__0__Args__expression"
+                    type = "plain"
+                    value = "RequestPath like '%health%' or RequestPath like '/'"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__2"
+                    type = "plain"
+                    value = "Serilog.Expressions"
+                }
+
+                environmentVariables {
+                    key = "AllowedOrigins"
+                    type = "plain"
+                    value = "#{AllowedOrigins}"
+                }
+
+                firelensConfiguration {
+                    type = "disabled"
+                }
+
+                healthCheck {}
+
+                networkSettings {
+                    disableNetworking = false
+                }
+
+                repositoryAuthentication {
+                    type = "default"
+                }
+            }
+
+            loadBalancerMappings {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                containerPort = 80
+                targetGroupArn = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].TgArn}"
+            }
+
+            networkConfiguration {
+                autoAssignPublicIp = false
+
+                securityGroupIds {
+                    id = "#{AwsEcs.SecurityGroupIdB}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdA}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdB}"
+                }
+            }
+
+            task {
+                cpu = 512
+                memory = 1024
+                taskExecutionRole = "#{AwsEcs.TaskExecutionRole}"
+
+                runtimePlatform {
+                    cpuArchitecture = "X86_64"
+                    operatingSystemFamily = "LINUX"
+                }
+            }
+
+            waitOption {
+                timeout = 30
+                type = "waitWithTimeout"
+            }
+        }
+    }
+}
+
+step "deploy-avio-connectiontest-consolidated" {
+    name = "Deploy Avio-ConnectionTest-Consolidated"
+    package_requirement = "AfterPackageAcquisition"
+    properties = {
+        Octopus.Action.TargetRoles = "ecs-cluster"
+    }
+    start_trigger = "StartWithPrevious"
+
+    action {
+        action_type = "aws-ecs"
+        notes = "Deploys Avio-ConnectionTest-Consolidated to an ecs cluster."
+        step_package_version = "2.3.0"
+        worker_pool = "default-worker-pool"
+
+        packages "avio-connectiontest" {
+            acquisition_location = "NotAcquired"
+            feed = "rivadev-ecr-feed"
+            package_id = "avio-connectiontest"
+            step_package_inputs_reference_id = "cbdbf8d7-4a40-4ee1-9e3c-e51af2950996"
+        }
+
+        inputs {
+            cfStackName = "CFS-#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}"
+            desiredCount = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].ServiceCount}"
+            maximumHealthPercent = 200
+            minimumHealthPercent = 100
+            name = "#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}-svc"
+
+            additionalTags {
+                enableEcsManagedTags = false
+            }
+
+            containers {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                essential = true
+
+                containerImageReference {
+                    feedId = "Feeds-1021"
+                    imageName = "avio-connectiontest"
+                    referenceId = "cbdbf8d7-4a40-4ee1-9e3c-e51af2950996"
+                }
+
+                containerLogging {
+                    type = "auto"
+                }
+
+                containerPortMappings {
+                    containerPort = 80
+                    protocol = "tcp"
+                }
+
+                containerStorage {
+                    readOnlyRootFileSystem = false
+                }
+
+                environmentVariables {
+                    key = "Jwt__Asymmetric__PublicKey"
+                    type = "plain"
+                    value = "#{AvioJwtPublicKey}"
+                }
+
+                environmentVariables {
+                    key = "RasConnectionStrings"
+                    type = "plain"
+                    value = "#{DockerDeploy.RasConnectionStrings}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__0"
+                    type = "plain"
+                    value = "Serilog.Sinks.Splunk"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__1"
+                    type = "plain"
+                    value = "Serilog.Sinks.File"
+                }
+
+                environmentVariables {
+                    key = "Serilog__MinimumLevel"
+                    type = "plain"
+                    value = "Information"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Name"
+                    type = "plain"
+                    value = "EventCollector"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__splunkHost"
+                    type = "plain"
+                    value = "#{AvioSplunk.SplunkHost}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__eventCollectorToken"
+                    type = "plain"
+                    value = "#{AvioSplunk.EventCollectorToken}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__index"
+                    type = "plain"
+                    value = "#{AvioSplunk.Index}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Name"
+                    type = "plain"
+                    value = "File"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Properties__Application"
+                    type = "plain"
+                    value = "Avio ConnectionTest Service"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__path"
+                    type = "plain"
+                    value = "./log-container.txt"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__rollingInterval"
+                    type = "plain"
+                    value = "Day"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__fileSizeLimitBytes"
+                    type = "plain"
+                    value = "10485760"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__0"
+                    type = "plain"
+                    value = "WithCorrelationId"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__1"
+                    type = "plain"
+                    value = "WithMachineName"
+                }
+
+                environmentVariables {
+                    key = "INSTANCE_ID"
+                    type = "plain"
+                    value = "#{AvioInstanceId}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__2__Name"
+                    type = "plain"
+                    value = "WithEnvironmentVariable"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__2__Args__name"
+                    type = "plain"
+                    value = "EnvironmentTag"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Properties__EnvironmentTag"
+                    type = "plain"
+                    value = "#{EnvironmentTag}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Filter__0__Name"
+                    type = "plain"
+                    value = "ByExcluding"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Filter__0__Args__expression"
+                    type = "plain"
+                    value = "RequestPath like '%health%' or RequestPath like '/'"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__2"
+                    type = "plain"
+                    value = "Serilog.Expressions"
+                }
+
+                environmentVariables {
+                    key = "AvioAuthorization__ConnectionTestManager"
+                    type = "plain"
+                    value = "ConnectionTest.FullResults"
+                }
+
+                firelensConfiguration {
+                    type = "disabled"
+                }
+
+                healthCheck {}
+
+                networkSettings {
+                    disableNetworking = false
+                }
+
+                repositoryAuthentication {
+                    type = "default"
+                }
+            }
+
+            loadBalancerMappings {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                containerPort = 80
+                targetGroupArn = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].TgArn}"
+            }
+
+            networkConfiguration {
+                autoAssignPublicIp = false
+
+                securityGroupIds {
+                    id = "#{AwsEcs.SecurityGroupIdB}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdA}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdB}"
+                }
+            }
+
+            task {
+                cpu = 512
+                memory = 1024
+                taskExecutionRole = "#{AwsEcs.TaskExecutionRole}"
+
+                runtimePlatform {
+                    cpuArchitecture = "X86_64"
+                    operatingSystemFamily = "LINUX"
+                }
+            }
+
+            waitOption {
+                timeout = 30
+                type = "waitWithTimeout"
+            }
+        }
+    }
+}
+
+step "deploy-avio-reinit-consolidated" {
+    name = "Deploy Avio-Reinit-Consolidated"
+    package_requirement = "AfterPackageAcquisition"
+    properties = {
+        Octopus.Action.TargetRoles = "ecs-cluster"
+    }
+    start_trigger = "StartWithPrevious"
+
+    action {
+        action_type = "aws-ecs"
+        notes = "Deploys Avio-Reinit-Consolidated to an ecs cluster."
+        step_package_version = "2.3.0"
+        worker_pool = "default-worker-pool"
+
+        packages "avio-reinit" {
+            acquisition_location = "NotAcquired"
+            feed = "rivadev-ecr-feed"
+            package_id = "avio-reinit"
+            step_package_inputs_reference_id = "cbdbf8d7-4a40-4ee1-9e3c-e51af2950996"
+        }
+
+        inputs {
+            cfStackName = "CFS-#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}"
+            desiredCount = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].ServiceCount}"
+            maximumHealthPercent = 200
+            minimumHealthPercent = 100
+            name = "#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}-svc"
+
+            additionalTags {
+                enableEcsManagedTags = false
+            }
+
+            containers {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                essential = true
+
+                containerImageReference {
+                    feedId = "Feeds-1021"
+                    imageName = "avio-reinit"
+                    referenceId = "cbdbf8d7-4a40-4ee1-9e3c-e51af2950996"
+                }
+
+                containerLogging {
+                    type = "auto"
+                }
+
+                containerPortMappings {
+                    containerPort = 80
+                    protocol = "tcp"
+                }
+
+                containerStorage {
+                    readOnlyRootFileSystem = false
+                }
+
+                environmentVariables {
+                    key = "Jwt__Asymmetric__PublicKey"
+                    type = "plain"
+                    value = "#{AvioJwtPublicKey}"
+                }
+
+                environmentVariables {
+                    key = "RasConnectionStrings"
+                    type = "plain"
+                    value = "#{DockerDeploy.RasConnectionStrings}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__0"
+                    type = "plain"
+                    value = "Serilog.Sinks.Splunk"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__1"
+                    type = "plain"
+                    value = "Serilog.Sinks.File"
+                }
+
+                environmentVariables {
+                    key = "Serilog__MinimumLevel"
+                    type = "plain"
+                    value = "Information"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Name"
+                    type = "plain"
+                    value = "EventCollector"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__splunkHost"
+                    type = "plain"
+                    value = "#{AvioSplunk.SplunkHost}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__eventCollectorToken"
+                    type = "plain"
+                    value = "#{AvioSplunk.EventCollectorToken}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__index"
+                    type = "plain"
+                    value = "#{AvioSplunk.Index}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Name"
+                    type = "plain"
+                    value = "File"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Properties__Application"
+                    type = "plain"
+                    value = "Avio Reinit Service"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__path"
+                    type = "plain"
+                    value = "./log-container.txt"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__rollingInterval"
+                    type = "plain"
+                    value = "Day"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__fileSizeLimitBytes"
+                    type = "plain"
+                    value = "10485760"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__0"
+                    type = "plain"
+                    value = "WithCorrelationId"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__1"
+                    type = "plain"
+                    value = "WithMachineName"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__auditIndex"
+                    type = "plain"
+                    value = "#{AvioSplunk.AuditIndex}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__2"
+                    type = "plain"
+                    value = "WithThreadId"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__3"
+                    type = "plain"
+                    value = "WithProcessId"
+                }
+
+                environmentVariables {
+                    key = "INSTANCE_ID"
+                    type = "plain"
+                    value = "#{AvioInstanceId}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__4__Name"
+                    type = "plain"
+                    value = "WithEnvironmentVariable"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__4__Args__name"
+                    type = "plain"
+                    value = "EnvironmentTag"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Properties__EnvironmentTag"
+                    type = "plain"
+                    value = "#{EnvironmentTag}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Filter__0__Name"
+                    type = "plain"
+                    value = "ByExcluding"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Filter__0__Args__expression"
+                    type = "plain"
+                    value = "RequestPath like '%health%' or RequestPath like '/'"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__2"
+                    type = "plain"
+                    value = "Serilog.Expressions"
+                }
+
+                environmentVariables {
+                    key = "AvioAuthorization__ProfileManager"
+                    type = "plain"
+                    value = "PolicyAdvancedOptions.Read,PolicyAdvancedOptions.ReadWrite,Policy.Read,Policy.ReadWrite,Connections.Read,Connections.ReadWrite,Reinit.Read,Reinit.AccessibleTypes.ClearMailboxIdConflict,Reinit.AccessibleTypes.OverrideDeleteSafety,Reinit.AccessibleTypes.OverrideDeleteSafetySkipDeletes,Reinit.AccessibleTypes.OverrideConflictingPolicySafety,Reinit.AccessibleTypes.RemoveEmptyLostAndFoundFolder,Reinit.AccessibleTypes.None,Reinit.AccessibleTypes.ArchiveItemErrorSummaryFolder,Reinit.AccessibleTypes.AdjustSensitivity,Reinit.AccessibleTypes.ClearUserIdorOrgIdConflict,Reinit.AccessibleTypes.FilteredResync,Reinit.AccessibleTypes.MailboxRepoll,Reinit.AccessibleTypes.MailboxResync,Reinit.AccessibleTypes.ModifyItemCategories,Reinit.AccessibleTypes.RefreshMasterCategoryList,Reinit.AccessibleTypes.Repoll,Reinit.AccessibleTypes.RestoreDeletedItems,Reinit.AccessibleTypes.Resync,Reinit.AccessibleTypes.ResyncRepoll,Reinit.AccessibleTypes.ReverseResyncRepoll,Users.Read,Users.ReadWrite,ConnectionTest.Read,ConnectionTest.ReadWrite,SyncNow.Read,SyncNow.ReadWrite,Node.Read,Node.ReadWrite"
+                }
+
+                environmentVariables {
+                    key = "AvioAuthorization__ProfileReader"
+                    type = "plain"
+                    value = "Policy.Read,Connections.Read,Reinit.Read,Reinit.AccessibleTypes.ClearMailboxIdConflict,Reinit.AccessibleTypes.OverrideDeleteSafety,Reinit.AccessibleTypes.OverrideDeleteSafetySkipDeletes,Reinit.AccessibleTypes.RemoveEmptyLostAndFoundFolder,Reinit.AccessibleTypes.None,Reinit.AccessibleTypes.ArchiveItemErrorSummaryFolder,Reinit.AccessibleTypes.AdjustSensitivity,Reinit.AccessibleTypes.ClearUserIdorOrgIdConflict,Reinit.AccessibleTypes.FilteredResync,Reinit.AccessibleTypes.MailboxRepoll,Reinit.AccessibleTypes.MailboxResync,Reinit.AccessibleTypes.ModifyItemCategories,Reinit.AccessibleTypes.RefreshMasterCategoryList,Reinit.AccessibleTypes.Repoll,Reinit.AccessibleTypes.RestoreDeletedItems,Reinit.AccessibleTypes.Resync,Reinit.AccessibleTypes.ResyncRepoll,Reinit.AccessibleTypes.ReverseResyncRepoll,Users.Read,Users.ReadWrite,ConnectionTest.Read,SyncNow.Read,SyncNow.ReadWrite"
+                }
+
+                environmentVariables {
+                    key = "AvioAuthorization__ProfileUserNodeAssignmentManager"
+                    type = "plain"
+                    value = "MoveUsers.Read,MoveUsers.ReadWrite"
+                }
+
+                firelensConfiguration {
+                    type = "disabled"
+                }
+
+                healthCheck {}
+
+                networkSettings {
+                    disableNetworking = false
+                }
+
+                repositoryAuthentication {
+                    type = "default"
+                }
+            }
+
+            loadBalancerMappings {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                containerPort = 80
+                targetGroupArn = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].TgArn}"
+            }
+
+            networkConfiguration {
+                autoAssignPublicIp = false
+
+                securityGroupIds {
+                    id = "#{AwsEcs.SecurityGroupIdB}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdA}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdB}"
+                }
+            }
+
+            task {
+                cpu = 512
+                memory = 1024
+                taskExecutionRole = "#{AwsEcs.TaskExecutionRole}"
+
+                runtimePlatform {
+                    cpuArchitecture = "X86_64"
+                    operatingSystemFamily = "LINUX"
+                }
+            }
+
+            waitOption {
+                timeout = 30
+                type = "waitWithTimeout"
+            }
+        }
+    }
+}
+
+step "deploy-avio-srv-connectiontest" {
+    name = "Deploy Avio-Srv-ConnectionTest"
+    package_requirement = "AfterPackageAcquisition"
+    properties = {
+        Octopus.Action.TargetRoles = "ecs-cluster"
+    }
+    start_trigger = "StartWithPrevious"
+
+    action {
+        action_type = "aws-ecs"
+        is_disabled = true
+        notes = "Deploys Avio-Srv-ConnectionTest to an ecs cluster."
+        properties = {
+            Octopus.Action.RunOnServer = "false"
+        }
+        step_package_version = "1.4.0"
+        tenant_tags = ["Version/Trunk"]
+
+        packages "avio-srv-connectiontest" {
+            acquisition_location = "NotAcquired"
+            feed = "rivadev-ecr-feed"
+            package_id = "avio-srv-connectiontest"
+            step_package_inputs_reference_id = "b4d422a0-8014-4ee9-b330-712f88c27d1f"
+        }
+
+        inputs {
+            cfStackName = "CFS-#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}"
+            desiredCount = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].ServiceCount}"
+            maximumHealthPercent = 200
+            minimumHealthPercent = 100
+            name = "#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}-svc"
+
+            additionalTags {
+                enableEcsManagedTags = false
+            }
+
+            containers {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                essential = true
+
+                containerImageReference {
+                    feedId = "Feeds-1021"
+                    imageName = "avio-srv-connectiontest"
+                    referenceId = "b4d422a0-8014-4ee9-b330-712f88c27d1f"
+                }
+
+                containerLogging {
+                    type = "auto"
+                }
+
+                containerPortMappings {
+                    containerPort = 80
+                    protocol = "tcp"
+                }
+
+                containerStorage {
+                    readOnlyRootFileSystem = false
+                }
+
+                environmentVariables {
+                    key = "Jwt__Asymmetric__PublicKey"
+                    type = "plain"
+                    value = "#{AvioJwtPublicKey}"
+                }
+
+                environmentVariables {
+                    key = "RasConnectionStrings"
+                    type = "plain"
+                    value = "#{DockerDeploy.RasConnectionStrings}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__0"
+                    type = "plain"
+                    value = "Serilog.Sinks.Splunk"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__1"
+                    type = "plain"
+                    value = "Serilog.Sinks.File"
+                }
+
+                environmentVariables {
+                    key = "Serilog__MinimumLevel"
+                    type = "plain"
+                    value = "Information"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Name"
+                    type = "plain"
+                    value = "EventCollector"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__splunkHost"
+                    type = "plain"
+                    value = "#{AvioSplunk.SplunkHost}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__eventCollectorToken"
+                    type = "plain"
+                    value = "#{DockerDeploy.SplunkEventCollectorToken}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__index"
+                    type = "plain"
+                    value = "#{AvioSplunk.Index}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Name"
+                    type = "plain"
+                    value = "File"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Properties__Application"
+                    type = "plain"
+                    value = "Avio ConnectionTest Service"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__path"
+                    type = "plain"
+                    value = "./log-container.txt"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__rollingInterval"
+                    type = "plain"
+                    value = "Day"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__fileSizeLimitBytes"
+                    type = "plain"
+                    value = "10485760"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__0"
+                    type = "plain"
+                    value = "WithCorrelationId"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__1"
+                    type = "plain"
+                    value = "WithEnvironmentUserName"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__2"
+                    type = "plain"
+                    value = "WithEnvironmentName"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__3"
+                    type = "plain"
+                    value = "WithMachineName"
+                }
+
+                healthCheck {}
+
+                networkSettings {
+                    disableNetworking = false
+                }
+
+                repositoryAuthentication {
+                    type = "default"
+                }
+            }
+
+            loadBalancerMappings {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                containerPort = 80
+                targetGroupArn = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].TgArn}"
+            }
+
+            networkConfiguration {
+                autoAssignPublicIp = false
+
+                securityGroupIds {
+                    id = "#{AwsEcs.SecurityGroupIdB}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdA}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdB}"
+                }
+            }
+
+            task {
+                cpu = 512
+                memory = 1024
+                taskExecutionRole = "#{AwsEcs.TaskExecutionRole}"
+
+                runtimePlatform {
+                    cpuArchitecture = "X86_64"
+                    operatingSystemFamily = "LINUX"
+                }
+            }
+
+            waitOption {
+                timeout = 30
+                type = "waitWithTimeout"
+            }
+        }
+    }
+}
+
+step "deploy-avio-metrics" {
+    name = "Deploy Avio-Metrics"
+    package_requirement = "AfterPackageAcquisition"
+    properties = {
+        Octopus.Action.TargetRoles = "ecs-cluster"
+    }
+
+    action {
+        action_type = "aws-ecs"
+        notes = "Deploys Avio-Metrics to an ecs cluster."
+        step_package_version = "2.3.0"
+        tenant_tags = ["Version/Trunk"]
+        worker_pool = "default-worker-pool"
+
+        packages "avio-metrics" {
+            acquisition_location = "NotAcquired"
+            feed = "rivadev-ecr-feed"
+            package_id = "avio-metrics"
+            step_package_inputs_reference_id = "fd8588e3-0051-4a0d-8798-0e63a903d6c8"
+        }
+
+        inputs {
+            cfStackName = "CFS-#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}"
+            desiredCount = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].ServiceCount}"
+            maximumHealthPercent = 200
+            minimumHealthPercent = 100
+            name = "#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}-svc"
+
+            additionalTags {
+                enableEcsManagedTags = false
+            }
+
+            containers {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                essential = true
+
+                containerImageReference {
+                    feedId = "Feeds-1021"
+                    imageName = "avio-metrics"
+                    referenceId = "fd8588e3-0051-4a0d-8798-0e63a903d6c8"
+                }
+
+                containerLogging {
+                    type = "auto"
+                }
+
+                containerPortMappings {
+                    containerPort = 80
+                    protocol = "tcp"
+                }
+
+                containerStorage {
+                    readOnlyRootFileSystem = false
+                }
+
+                environmentVariables {
+                    key = "Jwt__Asymmetric__PublicKey"
+                    type = "plain"
+                    value = "#{AvioJwtPublicKey}"
+                }
+
+                environmentVariables {
+                    key = "RasConnectionStrings"
+                    type = "plain"
+                    value = "#{DockerDeploy.RasConnectionStrings}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__0"
+                    type = "plain"
+                    value = "Serilog.Sinks.Splunk"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__1"
+                    type = "plain"
+                    value = "Serilog.Sinks.File"
+                }
+
+                environmentVariables {
+                    key = "Serilog__MinimumLevel"
+                    type = "plain"
+                    value = "Information"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Name"
+                    type = "plain"
+                    value = "EventCollector"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__splunkHost"
+                    type = "plain"
+                    value = "#{AvioSplunk.SplunkHost}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__eventCollectorToken"
+                    type = "plain"
+                    value = "#{AvioSplunk.EventCollectorToken}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__index"
+                    type = "plain"
+                    value = "#{AvioSplunk.Index}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Name"
+                    type = "plain"
+                    value = "File"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Properties__Application"
+                    type = "plain"
+                    value = "Avio Metrics Service"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__path"
+                    type = "plain"
+                    value = "./log-container.txt"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__rollingInterval"
+                    type = "plain"
+                    value = "Day"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__fileSizeLimitBytes"
+                    type = "plain"
+                    value = "10485760"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__0"
+                    type = "plain"
+                    value = "WithCorrelationId"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__1"
+                    type = "plain"
+                    value = "WithMachineName"
+                }
+
+                environmentVariables {
+                    key = "INSTANCE_ID"
+                    type = "plain"
+                    value = "#{AvioInstanceId}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__2__Name"
+                    type = "plain"
+                    value = "WithEnvironmentVariable"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__2__Args__name"
+                    type = "plain"
+                    value = "EnvironmentTag"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Properties__EnvironmentTag"
+                    type = "plain"
+                    value = "#{EnvironmentTag}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Filter__0__Name"
+                    type = "plain"
+                    value = "ByExcluding"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Filter__0__Args__expression"
+                    type = "plain"
+                    value = "RequestPath like '%health%' or RequestPath like '/'"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__2"
+                    type = "plain"
+                    value = "Serilog.Expressions"
+                }
+
+                environmentVariables {
+                    key = "MongoDb__Client__ConnectionString"
+                    type = "plain"
+                    value = "#{MongoDbClientConnectionString}"
+                }
+
+                environmentVariables {
+                    key = "MongoDb__Client__DatabaseName__Base"
+                    type = "plain"
+                    value = "#{MongoDbClientDatabaseNameBase}"
+                }
+
+                environmentVariables {
+                    key = "MongoDb__Client__CollectionNames"
+                    type = "plain"
+                    value = "#{MongoDbClientCollectionName}"
+                }
+
+                environmentVariables {
+                    key = "MongoDb__Client__DatabaseName__PerformanceStats"
+                    type = "plain"
+                    value = "#{MongoDbClientDatabaseNamePerformanceStats}"
+                }
+
+                environmentVariables {
+                    key = "MongoDb__Client__DatabaseName__ActivityStats"
+                    type = "plain"
+                    value = "#{MongoDbClientDatabaseNameActivityStats}"
+                }
+
+                environmentVariables {
+                    key = "MongoDb__Client__CollectionName__PerformanceStats"
+                    type = "plain"
+                    value = "#{MongoDbClientCollectionNamePerformanceStats}"
+                }
+
+                environmentVariables {
+                    key = "MongoDb__Client__CollectionName__ActivityStats"
+                    type = "plain"
+                    value = "#{MongoDbClientCollectionNameActivityStats}"
+                }
+
+                environmentVariables {
+                    key = "MongoDb__Client__CollectionName__Metadata"
+                    type = "plain"
+                    value = "#{MongoDbClientCollectionNameMetadata}"
+                }
+
+                firelensConfiguration {
+                    type = "disabled"
+                }
+
+                healthCheck {}
+
+                networkSettings {
+                    disableNetworking = false
+                }
+
+                repositoryAuthentication {
+                    type = "default"
+                }
+            }
+
+            loadBalancerMappings {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                containerPort = 80
+                targetGroupArn = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].TgArn}"
+            }
+
+            networkConfiguration {
+                autoAssignPublicIp = false
+
+                securityGroupIds {
+                    id = "#{AwsEcs.SecurityGroupIdB}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdA}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdB}"
+                }
+            }
+
+            task {
+                cpu = 512
+                memory = 1024
+                taskExecutionRole = "#{AwsEcs.TaskExecutionRole}"
+
+                runtimePlatform {
+                    cpuArchitecture = "X86_64"
+                    operatingSystemFamily = "LINUX"
+                }
+            }
+
+            waitOption {
+                timeout = 30
+                type = "waitWithTimeout"
+            }
+        }
+    }
+}
+
+step "deploy-avio-connections-consolidated" {
+    name = "Deploy Avio-Connections-Consolidated"
+    package_requirement = "AfterPackageAcquisition"
+    properties = {
+        Octopus.Action.TargetRoles = "ecs-cluster"
+    }
+
+    action {
+        action_type = "aws-ecs"
+        notes = "Deploys Avio-Connections-Consolidated to an ecs cluster."
+        step_package_version = "2.3.0"
+        tenant_tags = ["Version/Trunk"]
+        worker_pool = "default-worker-pool"
+
+        packages "avio-connections" {
+            acquisition_location = "NotAcquired"
+            feed = "rivadev-ecr-feed"
+            package_id = "avio-connections"
+            step_package_inputs_reference_id = "75ca1bc3-0327-4619-b31e-5b0fad84966e"
+        }
+
+        inputs {
+            cfStackName = "CFS-#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}"
+            desiredCount = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].ServiceCount}"
+            maximumHealthPercent = 200
+            minimumHealthPercent = 100
+            name = "#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}-svc"
+
+            additionalTags {
+                enableEcsManagedTags = false
+            }
+
+            containers {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                essential = true
+
+                containerImageReference {
+                    feedId = "Feeds-1021"
+                    imageName = "avio-connections"
+                    referenceId = "75ca1bc3-0327-4619-b31e-5b0fad84966e"
+                }
+
+                containerLogging {
+                    type = "auto"
+                }
+
+                containerPortMappings {
+                    containerPort = 80
+                    protocol = "tcp"
+                }
+
+                containerStorage {
+                    readOnlyRootFileSystem = false
+                }
+
+                environmentVariables {
+                    key = "Jwt__Asymmetric__PublicKey"
+                    type = "plain"
+                    value = "#{AvioJwtPublicKey}"
+                }
+
+                environmentVariables {
+                    key = "RasConnectionStrings"
+                    type = "plain"
+                    value = "#{DockerDeploy.RasConnectionStrings}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__0"
+                    type = "plain"
+                    value = "Serilog.Sinks.Splunk"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__1"
+                    type = "plain"
+                    value = "Serilog.Sinks.File"
+                }
+
+                environmentVariables {
+                    key = "Serilog__MinimumLevel"
+                    type = "plain"
+                    value = "Information"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Name"
+                    type = "plain"
+                    value = "EventCollector"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__splunkHost"
+                    type = "plain"
+                    value = "#{AvioSplunk.SplunkHost}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__eventCollectorToken"
+                    type = "plain"
+                    value = "#{AvioSplunk.EventCollectorToken}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__index"
+                    type = "plain"
+                    value = "#{AvioSplunk.Index}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Name"
+                    type = "plain"
+                    value = "File"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Properties__Application"
+                    type = "plain"
+                    value = "Avio Connections Service"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__path"
+                    type = "plain"
+                    value = "./log-container.txt"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__rollingInterval"
+                    type = "plain"
+                    value = "Day"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__fileSizeLimitBytes"
+                    type = "plain"
+                    value = "10485760"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__0"
+                    type = "plain"
+                    value = "WithCorrelationId"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__1"
+                    type = "plain"
+                    value = "WithMachineName"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__auditIndex"
+                    type = "plain"
+                    value = "#{AvioSplunk.AuditIndex}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__2"
+                    type = "plain"
+                    value = "WithThreadId"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__3"
+                    type = "plain"
+                    value = "WithProcessId"
+                }
+
+                environmentVariables {
+                    key = "INSTANCE_ID"
+                    type = "plain"
+                    value = "#{AvioInstanceId}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__4__Name"
+                    type = "plain"
+                    value = "WithEnvironmentVariable"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__4__Args__name"
+                    type = "plain"
+                    value = "EnvironmentTag"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Properties__EnvironmentTag"
+                    type = "plain"
+                    value = "#{EnvironmentTag}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Filter__0__Name"
+                    type = "plain"
+                    value = "ByExcluding"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Filter__0__Args__expression"
+                    type = "plain"
+                    value = "RequestPath like '%health%' or RequestPath like '/'"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__2"
+                    type = "plain"
+                    value = "Serilog.Expressions"
+                }
+
+                firelensConfiguration {
+                    type = "disabled"
+                }
+
+                healthCheck {}
+
+                networkSettings {
+                    disableNetworking = false
+                }
+
+                repositoryAuthentication {
+                    type = "default"
+                }
+            }
+
+            loadBalancerMappings {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                containerPort = 80
+                targetGroupArn = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].TgArn}"
+            }
+
+            networkConfiguration {
+                autoAssignPublicIp = true
+
+                securityGroupIds {
+                    id = "#{AwsEcs.SecurityGroupIdB}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdA}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdB}"
+                }
+            }
+
+            task {
+                cpu = 512
+                memory = 1024
+                taskExecutionRole = "#{AwsEcs.TaskExecutionRole}"
+
+                runtimePlatform {
+                    cpuArchitecture = "X86_64"
+                    operatingSystemFamily = "LINUX"
+                }
+            }
+
+            waitOption {
+                timeout = 30
+                type = "waitWithTimeout"
+            }
+        }
+    }
+}
+
+step "deploy-avio-users-consolidated" {
+    name = "Deploy Avio-Users-Consolidated"
+    package_requirement = "AfterPackageAcquisition"
+    properties = {
+        Octopus.Action.TargetRoles = "ecs-cluster"
+    }
+
+    action {
+        action_type = "aws-ecs"
+        notes = "Deploys Avio-Users-Consolidated to an ecs cluster."
+        step_package_version = "2.3.0"
+        tenant_tags = ["Version/Trunk"]
+        worker_pool = "default-worker-pool"
+
+        packages "avio-users" {
+            acquisition_location = "NotAcquired"
+            feed = "rivadev-ecr-feed"
+            package_id = "avio-users"
+            step_package_inputs_reference_id = "36c32f1b-569a-4204-b22e-d39eb9fcfff7"
+        }
+
+        inputs {
+            cfStackName = "CFS-#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}"
+            desiredCount = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].ServiceCount}"
+            maximumHealthPercent = 200
+            minimumHealthPercent = 100
+            name = "#{DockerDeploy.StackNamePart}-#{DockerDeploy.MicroserviceName}-#{Octopus.Environment.Name}-svc"
+
+            additionalTags {
+                enableEcsManagedTags = false
+            }
+
+            containers {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                essential = true
+
+                containerImageReference {
+                    feedId = "Feeds-1021"
+                    imageName = "avio-users"
+                    referenceId = "36c32f1b-569a-4204-b22e-d39eb9fcfff7"
+                }
+
+                containerLogging {
+                    type = "auto"
+                }
+
+                containerPortMappings {
+                    containerPort = 80
+                    protocol = "tcp"
+                }
+
+                containerStorage {
+                    readOnlyRootFileSystem = false
+                }
+
+                environmentVariables {
+                    key = "Jwt__Asymmetric__PublicKey"
+                    type = "plain"
+                    value = "#{AvioJwtPublicKey}"
+                }
+
+                environmentVariables {
+                    key = "RasConnectionStrings"
+                    type = "plain"
+                    value = "#{DockerDeploy.RasConnectionStrings}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__0"
+                    type = "plain"
+                    value = "Serilog.Sinks.Splunk"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__1"
+                    type = "plain"
+                    value = "Serilog.Sinks.File"
+                }
+
+                environmentVariables {
+                    key = "Serilog__MinimumLevel"
+                    type = "plain"
+                    value = "Information"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Name"
+                    type = "plain"
+                    value = "EventCollector"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__splunkHost"
+                    type = "plain"
+                    value = "#{AvioSplunk.SplunkHost}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__eventCollectorToken"
+                    type = "plain"
+                    value = "#{AvioSplunk.EventCollectorToken}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__index"
+                    type = "plain"
+                    value = "#{AvioSplunk.Index}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Name"
+                    type = "plain"
+                    value = "File"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Properties__Application"
+                    type = "plain"
+                    value = "Avio Users Service"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__path"
+                    type = "plain"
+                    value = "./log-container.txt"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__rollingInterval"
+                    type = "plain"
+                    value = "Day"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__1__Args__fileSizeLimitBytes"
+                    type = "plain"
+                    value = "10485760"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__0"
+                    type = "plain"
+                    value = "WithCorrelationId"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__1"
+                    type = "plain"
+                    value = "WithMachineName"
+                }
+
+                environmentVariables {
+                    key = "Serilog__WriteTo__0__Args__auditIndex"
+                    type = "plain"
+                    value = "#{AvioSplunk.AuditIndex}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__2"
+                    type = "plain"
+                    value = "WithThreadId"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__3"
+                    type = "plain"
+                    value = "WithProcessId"
+                }
+
+                environmentVariables {
+                    key = "INSTANCE_ID"
+                    type = "plain"
+                    value = "#{AvioInstanceId}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__4__Name"
+                    type = "plain"
+                    value = "WithEnvironmentVariable"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Enrich__4__Args__name"
+                    type = "plain"
+                    value = "EnvironmentTag"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Properties__EnvironmentTag"
+                    type = "plain"
+                    value = "#{EnvironmentTag}"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Filter__0__Name"
+                    type = "plain"
+                    value = "ByExcluding"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Filter__0__Args__expression"
+                    type = "plain"
+                    value = "RequestPath like '%health%' or RequestPath like '/'"
+                }
+
+                environmentVariables {
+                    key = "Serilog__Using__2"
+                    type = "plain"
+                    value = "Serilog.Expressions"
+                }
+
+                environmentVariables {
+                    key = "AllowedOrigins"
+                    type = "plain"
+                    value = "#{AllowedOrigins}"
+                }
+
+                firelensConfiguration {
+                    type = "disabled"
+                }
+
+                healthCheck {}
+
+                networkSettings {
+                    disableNetworking = false
+                }
+
+                repositoryAuthentication {
+                    type = "default"
+                }
+            }
+
+            loadBalancerMappings {
+                containerName = "#{DockerDeploy.MicroserviceName}-ctr"
+                containerPort = 80
+                targetGroupArn = "#{DockerDeploy.MicroService[#{DockerDeploy.MicroserviceName}].TgArn}"
+            }
+
+            networkConfiguration {
+                autoAssignPublicIp = true
+
+                securityGroupIds {
+                    id = "#{AwsEcs.SecurityGroupIdB}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdA}"
+                }
+
+                subnetIds {
+                    id = "#{AwsEcs.SubnetIdB}"
+                }
+            }
+
+            task {
+                cpu = 512
+                memory = 1024
+                taskExecutionRole = "#{AwsEcs.TaskExecutionRole}"
+
+                runtimePlatform {
+                    cpuArchitecture = "X86_64"
+                    operatingSystemFamily = "LINUX"
+                }
+            }
+
+            waitOption {
+                timeout = 30
+                type = "waitWithTimeout"
+            }
+        }
+    }
+}
