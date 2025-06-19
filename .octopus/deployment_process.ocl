@@ -1,1 +1,94 @@
+step "deploy-amazon-ecs-service" {
+    name = "Deploy Amazon ECS Service"
+    package_requirement = "AfterPackageAcquisition"
+    properties = {
+        Octopus.Action.TargetRoles = "bloop"
+    }
 
+    action {
+        action_type = "aws-ecs"
+        step_package_version = "2.3.0"
+        worker_pool = "hosted-windows"
+        worker_pool_variable = ""
+
+        packages "couchbase" {
+            acquisition_location = "NotAcquired"
+            feed = "dockerhub"
+            package_id = "couchbase"
+            step_package_inputs_reference_id = "69d18ce3-b3f3-4081-ba6a-b205c12ee8c9"
+        }
+
+        inputs {
+            desiredCount = 1
+            maximumHealthPercent = 200
+            minimumHealthPercent = 100
+            name = "asdf"
+
+            additionalTags {
+                enableEcsManagedTags = false
+            }
+
+            containers {
+                containerName = "asdf"
+                essential = true
+
+                containerImageReference {
+                    feedId = "Feeds-3209"
+                    imageName = "couchbase"
+                    referenceId = "69d18ce3-b3f3-4081-ba6a-b205c12ee8c9"
+                }
+
+                containerLogging {
+                    type = "auto"
+                }
+
+                containerStorage {
+                    readOnlyRootFileSystem = false
+                }
+
+                firelensConfiguration {
+                    type = "disabled"
+                }
+
+                healthCheck {}
+
+                networkSettings {
+                    disableNetworking = false
+                }
+
+                repositoryAuthentication {
+                    type = "default"
+                }
+            }
+
+            networkConfiguration {
+                autoAssignPublicIp = true
+
+                securityGroupIds {
+                    id = "asdf"
+                }
+
+                subnetIds {
+                    id = "asdf"
+                }
+            }
+
+            task {
+                cpu = 256
+                memory = 512
+                taskExecutionRole = "asdf"
+                taskRole = "asdf"
+
+                runtimePlatform {
+                    cpuArchitecture = "X86_64"
+                    operatingSystemFamily = "LINUX"
+                }
+            }
+
+            waitOption {
+                timeout = 30
+                type = "waitWithTimeout"
+            }
+        }
+    }
+}
