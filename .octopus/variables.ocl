@@ -2,6 +2,6 @@ variable "AWS_Account" {
     type = "AmazonWebServicesAccount"
 
     value "kenny-aws" {
-        environment = ["development"]
+        environment = ["test"]
     }
 }
